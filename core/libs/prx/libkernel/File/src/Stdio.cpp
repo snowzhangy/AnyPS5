@@ -243,7 +243,7 @@ int APS5_VABI chmod_nid_postfix(const char* path, int mode) {
     if (path == nullptr) {
         APS5_INVALID_ARG_EX;
     }
-    if (PackageLookup_nid_no_patch(path, nullptr)) return PosixFailure(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return PosixFailure(GUEST_EROFS);
     auto native = ResolvePath_nid_no_patch(path);
     if (NativeChmod(native, mode) != 0) {
         throw std::runtime_error(std::string(__func__) + ": chmod failed for " + native.string() + ", errno=" + std::to_string(errno));
@@ -318,6 +318,7 @@ int APS5_VABI mkdir_nid_postfix(const char* path, uint16_t mode) {
         APS5_INVALID_ARG_EX;
     }
     if (PackageLookup_nid_no_patch(path, nullptr)) return PosixFailure(GUEST_EEXIST);
+    if (PackagePath_nid_no_patch(path)) return PosixFailure(GUEST_EROFS);
     auto native = ResolvePath_nid_no_patch(path);
     if (NativeMkdir(native, mode) != 0) {
         throw std::runtime_error(std::string(__func__) + ": mkdir failed for " + native.string() + ", errno=" + std::to_string(errno));
@@ -504,6 +505,7 @@ int APS5_VABI sceKernelMkdir(const char* path, uint16_t mode) {
     (void)mode;
     if (path == nullptr) throw std::invalid_argument("sceKernelMkdir: path is null");
     if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EEXIST);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     const auto native = ResolvePath_nid_no_patch(path);
     std::error_code error;
     if (std::filesystem::exists(native, error)) return SceErrorFromErrno(GUEST_EEXIST);
@@ -611,7 +613,7 @@ int64_t APS5_VABI sceKernelPwritev(int d, const KernelIovec* iov, int iovcnt, in
 
 int APS5_VABI sceKernelRename(const char* from, const char* to) {
     if (from == nullptr || to == nullptr) throw std::invalid_argument("sceKernelRename: path is null");
-    if (PackageLookup_nid_no_patch(from, nullptr) || PackageLookup_nid_no_patch(to, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(from) || PackagePath_nid_no_patch(to)) return SceErrorFromErrno(GUEST_EROFS);
     const auto source = ResolvePath_nid_no_patch(from);
     std::error_code error;
     if (!std::filesystem::exists(source, error)) return SceErrorFromErrno(GUEST_ENOENT);
@@ -622,7 +624,7 @@ int APS5_VABI sceKernelRename(const char* from, const char* to) {
 
 int APS5_VABI sceKernelRmdir(const char* path) {
     if (path == nullptr) throw std::invalid_argument("sceKernelRmdir: path is null");
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     const auto native = ResolvePath_nid_no_patch(path);
     std::error_code error;
     if (!std::filesystem::is_directory(native, error)) return SceErrorFromErrno(std::filesystem::exists(native, error) ? GUEST_ENOTDIR : GUEST_ENOENT);
@@ -658,7 +660,7 @@ int APS5_VABI fchmod_nid_postfix(int d, int mode) {
 int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t length) {
     if (path == nullptr) throw std::invalid_argument("sceKernelTruncate: path is null");
     if (length < 0) return SceErrorFromErrno(GUEST_EINVAL);
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     const auto native = ResolvePath_nid_no_patch(path);
     std::error_code error;
     if (!std::filesystem::exists(native, error)) return SceErrorFromErrno(GUEST_ENOENT);
@@ -669,7 +671,7 @@ int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t lengt
 
 int APS5_VABI sceKernelUtimes_nid_postfix(const char* path, const KernelTimeval* times) {
     if (path == nullptr) throw std::invalid_argument("sceKernelUtimes: path is null");
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     const auto native = ResolvePath_nid_no_patch(path);
     if (NativeUtimes(native, times) != 0) return SceErrorFromErrno(errno);
     return 0;

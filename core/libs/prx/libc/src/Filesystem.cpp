@@ -99,7 +99,7 @@ extern "C" int APS5_VABI rename_nid_postfix(const char* from, const char* to) {
     if (!from || !to) { errno = 14; return -1; }
     if (!*from || !*to) { errno = 2; return -1; }
     try {
-        if (PackageLookup_nid_no_patch(from, nullptr) || PackageLookup_nid_no_patch(to, nullptr)) { errno = 30; return -1; }
+        if (PackagePath_nid_no_patch(from) || PackagePath_nid_no_patch(to)) { errno = 30; return -1; }
         const auto source = ResolvePath_nid_no_patch(from);
         const auto destination = ResolvePath_nid_no_patch(to);
         std::error_code error;
@@ -117,7 +117,7 @@ extern "C" int APS5_VABI remove_nid_postfix(const char* path) {
     if (!path) { errno = 14; return -1; }
     if (!*path) { errno = 2; return -1; }
     try {
-        if (PackageLookup_nid_no_patch(path, nullptr)) { errno = 30; return -1; }
+        if (PackagePath_nid_no_patch(path)) { errno = 30; return -1; }
         const auto resolved = ResolvePath_nid_no_patch(path);
         std::error_code error;
 #ifdef _WIN32
