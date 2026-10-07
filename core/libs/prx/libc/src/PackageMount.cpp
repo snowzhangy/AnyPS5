@@ -44,13 +44,14 @@ int sceError(const int error) {
 struct Descriptor {
     const Pkg::PackageNode* Node = nullptr;
     std::uint64_t Position = 0;
+    std::mutex Mutex;
 };
 
 struct MountState {
     std::once_flag once;
     std::unique_ptr<Pkg::Package> package;
     std::mutex mutex;
-    std::unordered_map<int, Descriptor> descriptors;
+    std::unordered_map<int, std::shared_ptr<Descriptor>> descriptors;
     int next = PackageMount::FirstDescriptor;
 };
 
@@ -131,16 +132,23 @@ Pkg::Package* Mounted() {
     return state.package.get();
 }
 
-const Pkg::PackageNode* Lookup(const char* path) {
-    if (path == nullptr) return nullptr;
-    const int savedError = errno;
-    auto* package = Mounted();
+bool ApplicationPath(const char* path, std::string* relative) {
+    if (path == nullptr) return false;
     std::string guest;
-    const Pkg::PackageNode* node = nullptr;
     constexpr std::size_t rootLength = sizeof(ApplicationRoot) - 1;
-    if (package != nullptr && GuestPath_nid_no_patch(path, &guest) && guest.compare(0, rootLength, ApplicationRoot) == 0 &&
-        (guest.size() == rootLength || guest[rootLength] == '/'))
-        node = package->Find(std::string_view(guest).substr(rootLength));
+    if (!GuestPath_nid_no_patch(path, &guest) || guest.compare(0, rootLength, ApplicationRoot) != 0 ||
+        (guest.size() != rootLength && guest[rootLength] != '/')) return false;
+    if (relative != nullptr) *relative = guest.substr(rootLength);
+    return true;
+}
+
+const Pkg::PackageNode* Lookup(const char* path) {
+    const int savedError = errno;
+    std::string relative;
+    const Pkg::PackageNode* node = nullptr;
+    if (ApplicationPath(path, &relative)) {
+        if (auto* package = Mounted()) node = package->Find(relative);
+    }
     errno = savedError;
     return node;
 }
@@ -159,11 +167,19 @@ void FillStat(const Pkg::Package& package, const Pkg::PackageNode& node, FileSta
     status->st_blocks = (status->st_size + 511) / 512;
 }
 
-Descriptor* Find(MountState& state, const int descriptor) {
+std::shared_ptr<Descriptor> Find(MountState& state, const int descriptor) {
+    std::lock_guard lock(state.mutex);
     const auto found = state.descriptors.find(descriptor);
-    return found == state.descriptors.end() ? nullptr : &found->second;
+    return found == state.descriptors.end() ? nullptr : found->second;
 }
 
+}
+
+extern "C" bool PackagePath_nid_no_patch(const char* guestPath) {
+    const int savedError = errno;
+    const bool result = ApplicationPath(guestPath, nullptr) && Mounted() != nullptr;
+    errno = savedError;
+    return result;
 }
 
 extern "C" bool PackageLookup_nid_no_patch(const char* guestPath, PackageMount::EntryInfo* info) {
@@ -188,11 +204,12 @@ extern "C" bool PackageReadAll_nid_no_patch(const char* guestPath, std::vector<s
 
 extern "C" bool PackageOpen_nid_no_patch(const char* guestPath, const int flags, int* result) {
     const auto* node = Lookup(guestPath);
-    if (node == nullptr) return false;
     if ((flags & GuestAccessMode) != 0 || (flags & GuestWriteFlags) != 0) {
+        if (node == nullptr && !PackagePath_nid_no_patch(guestPath)) return false;
         *result = sceError(GuestErofs);
         return true;
     }
+    if (node == nullptr) return false;
     if ((flags & GuestDirectoryFlag) != 0 && !node->Directory) {
         *result = sceError(GuestEnotdir);
         return true;
@@ -205,7 +222,9 @@ extern "C" bool PackageOpen_nid_no_patch(const char* guestPath, const int flags,
     }
     while (state.descriptors.contains(state.next)) state.next = state.next == PackageMount::LastDescriptor ? PackageMount::FirstDescriptor : state.next + 1;
     *result = state.next;
-    state.descriptors.emplace(state.next, Descriptor{node, 0});
+    auto entry = std::make_shared<Descriptor>();
+    entry->Node = node;
+    state.descriptors.emplace(state.next, std::move(entry));
     state.next = state.next == PackageMount::LastDescriptor ? PackageMount::FirstDescriptor : state.next + 1;
     return true;
 }
@@ -217,51 +236,36 @@ extern "C" int PackageClose_nid_no_patch(const int descriptor) {
 }
 
 extern "C" std::int64_t PackagePread_nid_no_patch(const int descriptor, void* buffer, const std::size_t size, const std::int64_t offset) {
-    auto& state = State();
-    const Pkg::PackageNode* node = nullptr;
-    {
-        std::lock_guard lock(state.mutex);
-        const auto* entry = Find(state, descriptor);
-        if (entry == nullptr) return sceError(GuestEbadf);
-        node = entry->Node;
-    }
-    if (node->Directory) return sceError(GuestEisdir);
+    const auto entry = Find(State(), descriptor);
+    if (entry == nullptr) return sceError(GuestEbadf);
+    if (entry->Node->Directory) return sceError(GuestEisdir);
     if (offset < 0) return sceError(GuestEinval);
-    return static_cast<std::int64_t>(Mounted()->Read(*node, static_cast<std::uint64_t>(offset), buffer, size));
+    return static_cast<std::int64_t>(Mounted()->Read(*entry->Node, static_cast<std::uint64_t>(offset), buffer, size));
 }
 
 extern "C" std::int64_t PackageRead_nid_no_patch(const int descriptor, void* buffer, const std::size_t size) {
-    auto& state = State();
-    Descriptor snapshot;
-    {
-        std::lock_guard lock(state.mutex);
-        const auto* entry = Find(state, descriptor);
-        if (entry == nullptr) return sceError(GuestEbadf);
-        snapshot = *entry;
-    }
-    if (snapshot.Node->Directory) return sceError(GuestEisdir);
-    const auto read = Mounted()->Read(*snapshot.Node, snapshot.Position, buffer, size);
-    std::lock_guard lock(state.mutex);
-    if (auto* entry = Find(state, descriptor)) entry->Position = snapshot.Position + read;
+    const auto entry = Find(State(), descriptor);
+    if (entry == nullptr) return sceError(GuestEbadf);
+    if (entry->Node->Directory) return sceError(GuestEisdir);
+    std::lock_guard lock(entry->Mutex);
+    const auto read = Mounted()->Read(*entry->Node, entry->Position, buffer, size);
+    entry->Position += read;
     return static_cast<std::int64_t>(read);
 }
 
 extern "C" std::int64_t PackageSeek_nid_no_patch(const int descriptor, const std::int64_t offset, const int whence) {
-    auto& state = State();
-    std::lock_guard lock(state.mutex);
-    auto* entry = Find(state, descriptor);
+    const auto entry = Find(State(), descriptor);
     if (entry == nullptr) return sceError(GuestEbadf);
+    std::lock_guard lock(entry->Mutex);
     const auto size = static_cast<std::int64_t>(entry->Node->Directory ? 0 : entry->Node->Size);
     const std::int64_t base = whence == 0 ? 0 : whence == 1 ? static_cast<std::int64_t>(entry->Position) : whence == 2 ? size : -1;
-    if (base < 0 || (offset < 0 && -offset > base) || (offset > 0 && offset > std::numeric_limits<std::int64_t>::max() - base)) return sceError(GuestEinval);
+    if (base < 0 || offset < -base || offset > std::numeric_limits<std::int64_t>::max() - base) return sceError(GuestEinval);
     entry->Position = static_cast<std::uint64_t>(base + offset);
     return base + offset;
 }
 
 extern "C" int PackageFstat_nid_no_patch(const int descriptor, FileStat* status) {
-    auto& state = State();
-    std::lock_guard lock(state.mutex);
-    const auto* entry = Find(state, descriptor);
+    const auto entry = Find(State(), descriptor);
     if (entry == nullptr) return sceError(GuestEbadf);
     FillStat(*Mounted(), *entry->Node, status);
     return 0;
@@ -289,12 +293,11 @@ extern "C" bool PackageListDirectory_nid_no_patch(const char* guestPath, std::ve
 }
 
 extern "C" int PackageGetdents_nid_no_patch(const int descriptor, char* buffer, const int size, std::int64_t* base) {
-    auto& state = State();
-    std::lock_guard lock(state.mutex);
-    auto* entry = Find(state, descriptor);
+    const auto entry = Find(State(), descriptor);
     if (entry == nullptr) return sceError(GuestEbadf);
     if (!entry->Node->Directory) return sceError(GuestEnotdir);
     if (size <= 0) return sceError(GuestEinval);
+    std::lock_guard lock(entry->Mutex);
     const auto& package = *Mounted();
     if (base != nullptr) *base = static_cast<std::int64_t>(entry->Position);
     const auto& children = entry->Node->Children;

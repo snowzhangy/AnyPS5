@@ -315,7 +315,7 @@ int APS5_VABI sceKernelUnlink(const char* path) {
         throw std::invalid_argument(std::string(__func__) + ": path is null");
     }
     if (*path == '\0') return SceErrorFromErrno(2);
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(30);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(30);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     constexpr int GuestEperm = 1;

@@ -1,15 +1,21 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/GuestDirectory.hpp"
+#include "prx/libc/include/FileStream.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include <algorithm>
+#include <atomic>
+#include <barrier>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iterator>
+#include <limits>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern "C" {
@@ -25,6 +31,8 @@ int APS5_VABI sceKernelGetdents(int, char*, int);
 int APS5_VABI sceKernelUnlink(const char*);
 int APS5_VABI sceKernelMkdir(const char*, std::uint16_t);
 int APS5_VABI sceKernelRename(const char*, const char*);
+int APS5_VABI sceKernelRmdir(const char*);
+int APS5_VABI sceKernelTruncate_nid_postfix(const char*, std::int64_t);
 int APS5_VABI sceKernelCheckReachability(const char*);
 int APS5_VABI open_nid_postfix(const char*, int, int);
 int APS5_VABI close_nid_postfix(int);
@@ -37,6 +45,10 @@ void* APS5_VABI opendir_nid_postfix(const char*);
 GuestDirectoryEntry* APS5_VABI readdir_nid_postfix(void*);
 void APS5_VABI rewinddir_nid_postfix(void*);
 int APS5_VABI closedir_nid_postfix(void*);
+FileStream* APS5_VABI fopen_nid_postfix(const char*, const char*);
+FileStream* APS5_VABI fdopen_nid_postfix(int, const char*);
+FileStream* APS5_VABI freopen_nid_postfix(const char*, const char*, FileStream*);
+int APS5_VABI fclose_nid_postfix(FileStream*);
 }
 
 namespace {
@@ -139,7 +151,60 @@ void Directories() {
     Require(sceKernelOpen("/app0/eboot.bin", ReadOnly | Directory, 0) == static_cast<int>(0x80020014u));
 }
 
+void ConcurrentReads() {
+    const auto expected = Expected("data/random.bin");
+    const int fd = sceKernelOpen("/app0/data/random.bin", ReadOnly, 0);
+    Require(fd >= 0x08000000);
+    constexpr std::size_t chunk = 0x40000;
+    constexpr std::size_t workers = 8;
+    std::barrier start(static_cast<std::ptrdiff_t>(workers));
+    std::atomic<std::size_t> total = 0;
+    std::vector<std::atomic<unsigned>> reads((expected.size() + chunk - 1) / chunk);
+    std::vector<std::thread> threads;
+    for (std::size_t index = 0; index < workers; ++index) {
+        threads.emplace_back([&] {
+            std::vector<std::uint8_t> buffer(chunk);
+            start.arrive_and_wait();
+            for (;;) {
+                const auto count = sceKernelRead(fd, buffer.data(), buffer.size());
+                Require(count >= 0);
+                if (count == 0) break;
+                bool matched = false;
+                for (std::size_t offset = 0; offset < expected.size(); offset += chunk) {
+                    const auto size = std::min(chunk, expected.size() - offset);
+                    if (count == static_cast<std::int64_t>(size) && std::memcmp(buffer.data(), expected.data() + offset, size) == 0) {
+                        ++reads[offset / chunk];
+                        matched = true;
+                        break;
+                    }
+                }
+                Require(matched);
+                total += static_cast<std::size_t>(count);
+            }
+        });
+    }
+    for (auto& thread : threads) thread.join();
+    Require(total == expected.size());
+    for (const auto& count : reads) Require(count == 1);
+    Require(sceKernelLseek(fd, 0, 1) == static_cast<std::int64_t>(expected.size()));
+    Require(sceKernelLseek(fd, std::numeric_limits<std::int64_t>::min(), 1) == static_cast<int>(0x80020016u));
+    Require(sceKernelLseek(fd, 0, 1) == static_cast<std::int64_t>(expected.size()));
+    Require(sceKernelLseek(fd, std::numeric_limits<std::int64_t>::max(), 0) == std::numeric_limits<std::int64_t>::max());
+    Require(sceKernelLseek(fd, 1, 1) == static_cast<int>(0x80020016u));
+    Require(sceKernelLseek(fd, 0, 1) == std::numeric_limits<std::int64_t>::max());
+    Require(sceKernelClose(fd) == 0);
+}
+
 void ReadOnlyMount() {
+    Require(sceKernelOpen("/app0/sce_module/created.bin", WriteOnly | Create, 0666) == Erofs);
+    Require(sceKernelMkdir("/app0/sce_module/created", 0777) == Erofs);
+    Require(sceKernelRename("/app0/sce_module/provider.prx.guest.prx", "/app0/sce_module/moved.prx") == Erofs);
+    Require(sceKernelUnlink("/app0/sce_module/provider.prx.guest.prx") == Erofs);
+    Require(sceKernelRmdir("/app0/sce_module") == Erofs);
+    Require(sceKernelTruncate_nid_postfix("/app0/sce_module/provider.prx.guest.prx", 0) == Erofs);
+    Require(remove_nid_postfix("/app0/sce_module/provider.prx.guest.prx") == -1 && *__error_nid_postfix() == 30);
+    Require(rename_nid_postfix("/app0/sce_module/provider.prx.guest.prx", "/app0/sce_module/moved.prx") == -1 && *__error_nid_postfix() == 30);
+    Require(fopen_nid_postfix("/app0/sce_module/created.bin", "wb") == nullptr && *__error_nid_postfix() == 30);
     Require(sceKernelOpen("/app0/eboot.bin", WriteOnly, 0) == Erofs);
     Require(sceKernelOpen("/app0/eboot.bin", ReadOnly | Create, 0666) == Erofs);
     Require(sceKernelUnlink("/app0/eboot.bin") == Erofs);
@@ -147,7 +212,9 @@ void ReadOnlyMount() {
     Require(sceKernelMkdir("/app0/data", 0777) == Eexist);
     Require(open_nid_postfix("/app0/data/zero.bin", WriteOnly, 0) == -1 && *__error_nid_postfix() == 30);
     const int fd = open_nid_postfix("/app0/data/zero.bin", ReadOnly, 0);
-    Require(fd >= 0x08000000 && close_nid_postfix(fd) == 0);
+    Require(fd >= 0x08000000);
+    Require(fdopen_nid_postfix(fd, "wb") == nullptr && *__error_nid_postfix() == 30);
+    Require(close_nid_postfix(fd) == 0);
 }
 
 void LibcEntryPoints() {
@@ -172,6 +239,17 @@ void LibcEntryPoints() {
     Require(closedir_nid_postfix(directory) == 0);
 }
 
+void OutsideMount() {
+    std::filesystem::create_directory("app0_extra");
+    auto* stream = fopen_nid_postfix("/app0_extra/created.bin", "wb");
+    Require(stream != nullptr);
+    Require(freopen_nid_postfix("/app0/sce_module/created.bin", "wb", stream) == nullptr && *__error_nid_postfix() == 30);
+    Require(fclose_nid_postfix(stream) == 0);
+    Require(sceKernelRename("/app0_extra/created.bin", "/app0/sce_module/created.bin") == Erofs);
+    Require(rename_nid_postfix("/app0_extra/created.bin", "/app0/sce_module/created.bin") == -1 && *__error_nid_postfix() == 30);
+    Require(sceKernelUnlink("/app0_extra/created.bin") == 0);
+}
+
 void HostFallback() {
     FileStat status{};
     Require(sceKernelStat("/app0/sce_module/provider.prx.guest.prx", &status) == 0 && status.st_size == 5);
@@ -186,10 +264,12 @@ void HostFallback() {
 
 int main() {
     Files();
+    ConcurrentReads();
     Directories();
     ReadOnlyMount();
     LibcEntryPoints();
     HostFallback();
+    OutsideMount();
     std::puts("Package mount tests passed");
     return 0;
 }

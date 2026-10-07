@@ -30,6 +30,7 @@ inline bool IsDescriptor(const int descriptor) {
 
 }
 
+extern "C" bool PackagePath_nid_no_patch(const char* guestPath);
 extern "C" bool PackageLookup_nid_no_patch(const char* guestPath, PackageMount::EntryInfo* info);
 extern "C" std::uint64_t PackageReadPath_nid_no_patch(const char* guestPath, std::uint64_t offset, void* destination, std::uint64_t size);
 extern "C" bool PackageReadAll_nid_no_patch(const char* guestPath, std::vector<std::uint8_t>* bytes);

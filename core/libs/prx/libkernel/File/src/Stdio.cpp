@@ -492,7 +492,7 @@ extern "C" {
 
 int APS5_VABI chmod_nid_postfix(const char* path, int mode) {
     if (const int error = PathError(path)) return PosixFailure(error);
-    if (PackageLookup_nid_no_patch(path, nullptr)) return PosixFailure(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return PosixFailure(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return PosixFailure(error);
     if (NativeChmod(native, mode & 07777) != 0) return PosixResult(SceErrorFromErrno(errno));
@@ -638,6 +638,7 @@ int64_t APS5_VABI lseek_nid_postfix(int d, int64_t offset, int whence) {
 int APS5_VABI mkdir_nid_postfix(const char* path, uint16_t mode) {
     if (const int error = PathError(path)) return PosixFailure(error);
     if (PackageLookup_nid_no_patch(path, nullptr)) return PosixFailure(GUEST_EEXIST);
+    if (PackagePath_nid_no_patch(path)) return PosixFailure(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return PosixFailure(error);
     if (NativeMkdir(native, mode) != 0) {
@@ -885,6 +886,7 @@ int APS5_VABI sceKernelMkdir(const char* path, uint16_t mode) {
     if (path == nullptr) throw std::invalid_argument("sceKernelMkdir: path is null");
     if (!*path) return SceErrorFromErrno(GUEST_ENOENT);
     if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EEXIST);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     while (!native.has_filename() && native.has_relative_path()) native = native.parent_path();
@@ -1092,7 +1094,7 @@ int64_t APS5_VABI pwritev_nid_postfix(int d, const KernelIovec* iov, int iovcnt,
 int APS5_VABI sceKernelRename(const char* from, const char* to) {
     if (from == nullptr || to == nullptr) throw std::invalid_argument("sceKernelRename: path is null");
     if (*from == '\0' || *to == '\0') return SceErrorFromErrno(GUEST_ENOENT);
-    if (PackageLookup_nid_no_patch(from, nullptr) || PackageLookup_nid_no_patch(to, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(from) || PackagePath_nid_no_patch(to)) return SceErrorFromErrno(GUEST_EROFS);
     std::filesystem::path source;
     if (const int error = ResolvePathError_nid_no_patch(from, source)) return SceKernelError(error);
     std::error_code error;
@@ -1109,7 +1111,7 @@ int APS5_VABI sceKernelRename(const char* from, const char* to) {
 int APS5_VABI sceKernelRmdir(const char* path) {
     if (path == nullptr) throw std::invalid_argument("sceKernelRmdir: path is null");
     if (*path == '\0') return SceErrorFromErrno(GUEST_ENOENT);
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     std::error_code error;
@@ -1136,7 +1138,7 @@ extern "C" {
 int APS5_VABI sceKernelChmod_nid_postfix(const char* path, std::uint16_t mode) {
     if (!path) return SceErrorFromErrno(GUEST_EFAULT);
     if (!*path) return SceErrorFromErrno(GUEST_ENOENT);
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     if (NativeChmod(native, mode & 07777) != 0) return SceErrorFromErrno(errno);
@@ -1158,7 +1160,7 @@ int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t lengt
     if (path == nullptr) throw std::invalid_argument("sceKernelTruncate: path is null");
     if (*path == '\0') return SceErrorFromErrno(GUEST_ENOENT);
     if (length < 0) return SceErrorFromErrno(GUEST_EINVAL);
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     std::error_code error;
@@ -1183,7 +1185,7 @@ int APS5_VABI sceKernelUtimes_nid_postfix(const char* path, const KernelTimeval*
             if (times[i].tv_usec < 0 || times[i].tv_usec >= 1000000) return SCE_KERNEL_ERROR_EINVAL;
         }
     }
-    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(GUEST_EROFS);
+    if (PackagePath_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EROFS);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     if (NativeUtimes(native, times) != 0) return SceErrorFromErrno(errno);
