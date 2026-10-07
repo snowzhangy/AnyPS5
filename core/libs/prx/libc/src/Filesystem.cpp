@@ -1,5 +1,6 @@
 #include "prx/libc/include/FilesystemError.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/PackageMount.hpp"
 #include <cerrno>
 #include <vector>
 #ifdef _WIN32
@@ -16,6 +17,10 @@ extern "C" int APS5_VABI access_nid_postfix(const char* path, int mode) {
     if (mode < 0 || (mode & ~7)) { errno = 22; return -1; }
     if (!*path) { errno = 2; return -1; }
     try {
+        if (PackageLookup_nid_no_patch(path, nullptr)) {
+            if (mode & 2) { errno = 30; return -1; }
+            return 0;
+        }
         const auto resolved = ResolvePath_nid_no_patch(path);
 #ifdef _WIN32
         const DWORD attributes = GetFileAttributesW(resolved.c_str());
@@ -74,6 +79,7 @@ extern "C" int APS5_VABI remove_nid_postfix(const char* path) {
     if (!path) { errno = 14; return -1; }
     if (!*path) { errno = 2; return -1; }
     try {
+        if (PackageLookup_nid_no_patch(path, nullptr)) { errno = 30; return -1; }
         const auto resolved = ResolvePath_nid_no_patch(path);
         if (FinalPathComponentIsDot_nid_no_patch(path)) {
             std::error_code statusError;

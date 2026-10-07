@@ -17,6 +17,7 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/FilesystemError.hpp"
 #include "prx/libc/include/GuestArena.hpp"
+#include "prx/libc/include/PackageMount.hpp"
 
 struct GuestFileMode {
     std::string native;
@@ -59,6 +60,7 @@ extern "C" {
 
 FileStream* APS5_VABI fdopen_nid_postfix(int descriptor, const char* mode) {
     if (descriptor < 0) { errno = 9; return nullptr; }
+    if (PackageMount::IsDescriptor(descriptor)) throw std::runtime_error(std::string(__func__) + ": stdio streams over package files are not supported yet");
     if (!mode) { errno = 22; return nullptr; }
     const char* supported[] = {"r", "w", "a", "rb", "wb", "ab", "r+", "w+", "a+",
         "rb+", "wb+", "ab+", "r+b", "w+b", "a+b"};
@@ -83,6 +85,7 @@ FileStream* APS5_VABI fdopen_nid_postfix(int descriptor, const char* mode) {
 FileStream* APS5_VABI freopen_nid_postfix(const char* filename, const char* mode, FileStream* stream) {
     if (!stream || !mode) { errno = 22; return nullptr; }
     if (!filename) { errno = 45; return nullptr; } // Mode-only reopening is not supported.
+    if (*filename && PackageLookup_nid_no_patch(filename, nullptr)) throw std::runtime_error(std::string(__func__) + ": stdio streams over package files are not supported yet: " + filename);
     const auto parsed = ParseFileMode(mode);
     if (!parsed) { errno = 22; return nullptr; }
     try {
@@ -109,6 +112,7 @@ FileStream* APS5_VABI freopen_nid_postfix(const char* filename, const char* mode
 
 FileStream* APS5_VABI fopen_nid_postfix(const char* filename, const char* mode) {
     if (!filename || !mode) throw std::runtime_error(std::string(__func__) + ": " + FOPEN_MSG_NULL_ARG);
+    if (PackageLookup_nid_no_patch(filename, nullptr)) throw std::runtime_error(std::string(__func__) + ": stdio streams over package files are not supported yet: " + filename);
     const auto parsed = ParseFileMode(mode);
     if (!parsed) {
         errno = EINVAL;
