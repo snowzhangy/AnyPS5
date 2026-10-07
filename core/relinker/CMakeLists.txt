@@ -10,6 +10,7 @@ add_executable(relinker
         ${CMAKE_CURRENT_SOURCE_DIR}/elfpatcher/src/windows/WindowsGuestStartup.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/relinker/src/guest/GuestImageReader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/relinker/src/guest/GuestModuleBuilder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/relinker/src/guest/PackageInput.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/elfpatcher/src/windows/WindowsPePatcher.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/elfpatcher/src/windows/WindowsIconResourceBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/elfpatcher/src/windows/WindowsPeFormat.cpp
@@ -80,6 +81,7 @@ target_include_directories(relinker PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/relinker/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../libs
 )
+target_link_libraries(relinker PRIVATE anyps5_pkg)
 
 if(BUILD_TESTING AND WIN32)
     get_target_property(windowsAliasTestSources relinker SOURCES)
@@ -92,6 +94,7 @@ if(BUILD_TESTING AND WIN32)
         ${windowsAliasTestSources})
     get_target_property(windowsAliasIncludes relinker INCLUDE_DIRECTORIES)
     target_include_directories(windows_guest_export_alias_tests PRIVATE ${windowsAliasIncludes})
+    target_link_libraries(windows_guest_export_alias_tests PRIVATE anyps5_pkg)
     add_test(NAME windows_guest_export_aliases COMMAND windows_guest_export_alias_tests)
 endif()
 
@@ -449,6 +452,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/relinker/tests/test_syscall_number.py $<TARGET_FILE:relinker>)
         add_test(NAME unused_filter_indirect COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/relinker/tests/test_unused_filter_indirect.py $<TARGET_FILE:relinker>)
+        add_test(NAME package_input COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/relinker/tests/test_package_input.py $<TARGET_FILE:relinker>)
     else()
         message(STATUS "Python3 interpreter not found; skipping Python relinker tests")
     endif()

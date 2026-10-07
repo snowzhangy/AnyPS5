@@ -21,6 +21,8 @@
 #include <relinker/output/CallRegistryWriter.hpp>
 #include <relinker/pipeline/RelinkerPipeline.hpp>
 #include <relinker/guest/GuestImage.hpp>
+#include <relinker/guest/PackageInput.hpp>
+#include <pkg/PackageFile.hpp>
 #include <codegen/IAmd64OnlyConverter.hpp>
 #include <map>
 #include <codegen/CodegenException.hpp>
@@ -28,6 +30,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -52,6 +55,12 @@ int Run(const int argc, char* argv[]) {
         return 0;
     }
 
+    const bool packageInput = Pkg::IsFinalizedPackage(Io::NativePath(args.inputPath));
+    if (!args.oodlePath.empty() && !packageInput) {
+        std::cerr << "FAIL: --oodle requires a PS5 .pkg input\n";
+        return 1;
+    }
+
     try {
         auto extension = Io::Utf8Path(Io::NativePath(args.outputPath).extension());
         for (auto& character : extension) if (character >= 'A' && character <= 'Z') character = static_cast<char>(character + ('a' - 'A'));
@@ -59,7 +68,12 @@ int Run(const int argc, char* argv[]) {
         Io::FileReader fileReader;
         Io::FileWriter fileWriter;
 
-        auto sourceBytes = fileReader.Read(args.inputPath);
+        std::optional<Relinker::PackageInput> package;
+        if (packageInput) {
+            package = Relinker::ReadPackageInput(Io::NativePath(args.inputPath), Io::NativePath(args.oodlePath), !args.skipSceModule, args.excludedSceModules);
+            std::cout << "Package: " << package->ContentId << "; eboot.bin and " << package->Modules.size() << " guest modules read from the package\n";
+        }
+        auto sourceBytes = package ? std::move(package->Executable) : fileReader.Read(args.inputPath);
         if (std::filesystem::exists(Io::NativePath(args.outputPath)) && std::filesystem::equivalent(Io::NativePath(args.inputPath), Io::NativePath(args.outputPath)))
             throw Domain::RelinkerException("Executable output would overwrite the input executable");
         const std::string absPath = Io::Utf8Path(std::filesystem::absolute(Io::NativePath(args.outputPath)));
@@ -109,11 +123,11 @@ int Run(const int argc, char* argv[]) {
 
         std::vector<Relinker::GuestArtifact> guestArtifacts;
         if (!args.skipSceModule) {
-            guestArtifacts = Relinker::GuestModuleBuilder().Build(Io::NativePath(args.inputPath), Io::NativePath(absPath), result.DynamicSection, args.toWindows, args.toMacos, args.toIntel, args.toRosetta, *syscallScanner, args.lazyBinding, args.runPath, args.excludedSceModules, Io::NativePath(args.sceModulePath), args.moduleDirectories);
+            guestArtifacts = Relinker::GuestModuleBuilder().Build(Io::NativePath(args.inputPath), Io::NativePath(absPath), result.DynamicSection, args.toWindows, args.toMacos, args.toIntel, args.toRosetta, *syscallScanner, args.lazyBinding, args.runPath, args.excludedSceModules, Io::NativePath(args.sceModulePath), args.moduleDirectories, package ? &package->Modules : nullptr);
         }
 
         const Elfpatcher::Linux::LinuxDesktopEntryWriter desktopEntryWriter;
-        const auto desktopEntry = args.toWindows || args.toMacos ? std::nullopt : desktopEntryWriter.Prepare(Io::NativePath(args.inputPath).parent_path() / "sce_sys", Io::NativePath(absPath));
+        const auto desktopEntry = args.toWindows || args.toMacos || package ? std::nullopt : desktopEntryWriter.Prepare(Io::NativePath(args.inputPath).parent_path() / "sce_sys", Io::NativePath(absPath));
 
         const auto checkOutputInputs = [&](const std::filesystem::path& path, const char* kind) {
             if (!std::filesystem::exists(path)) return;
@@ -147,8 +161,10 @@ int Run(const int argc, char* argv[]) {
         std::shared_ptr<Elfpatcher::IElfPatcher> patcher;
         if (args.toMacos) {
             patcher = std::make_shared<Elfpatcher::MacOs::MacOsMachOPatcher>();
+        } else if (args.toWindows && package && package->Icon) {
+            patcher = std::make_shared<Elfpatcher::Windows::WindowsPePatcher>(args.windowsGui, std::move(*package->Icon), Io::NativePath(args.inputPath) / "sce_sys" / "icon0.png");
         } else if (args.toWindows) {
-            patcher = std::make_shared<Elfpatcher::Windows::WindowsPePatcher>(args.windowsGui, Io::NativePath(args.inputPath).parent_path() / "sce_sys" / "icon0.png");
+            patcher = std::make_shared<Elfpatcher::Windows::WindowsPePatcher>(args.windowsGui, package ? std::filesystem::path{} : Io::NativePath(args.inputPath).parent_path() / "sce_sys" / "icon0.png");
         } else {
             patcher = std::make_shared<Elfpatcher::Linux::LinuxElfPatcher>(
                 std::make_shared<Elfpatcher::EntryStubBuilder>(),
@@ -175,16 +191,24 @@ int Run(const int argc, char* argv[]) {
         }
         fileWriter.Write(absPath, executableBytes);
         if (desktopEntry) std::cout << "Desktop entry: " << Io::Utf8Path(desktopEntryWriter.Write(*desktopEntry)) << '\n';
+        const auto sidecarPath = Io::NativePath(absPath).parent_path() / Relinker::PackageSidecarName;
+        if (package) {
+            fileWriter.Write(Io::Utf8Path(sidecarPath), Relinker::FormatPackageSidecar(Io::NativePath(args.inputPath), *package, Io::NativePath(args.oodlePath)));
+            std::cout << "Package mount: " << Io::Utf8Path(sidecarPath) << '\n';
+        } else if (std::filesystem::exists(sidecarPath)) {
+            std::filesystem::remove(sidecarPath);
+            std::cout << "Removed stale package mount: " << Io::Utf8Path(sidecarPath) << '\n';
+        }
         std::cout << "External prx references: " << result.RegistryEntries.size() << "\nOutput file: " << absPath << '\n';
         std::cout << "Expected runtime layout (relative to the output executable):\n"
                   << Io::Utf8Path(Io::NativePath(absPath).filename()) << "\n"
-                  << "libs/\n    *.prx\napp0/\n    <game resources>\n";
+                  << "libs/\n    *.prx\napp0/\n    " << (package ? "<served from the package>" : "<game resources>") << '\n';
         for (const auto& artifact : guestArtifacts) {
             std::string relative = Io::Utf8Path(artifact.Path.lexically_relative(Io::NativePath(absPath).parent_path() / "app0"));
             std::replace(relative.begin(), relative.end(), '\\', '/');
             std::cout << "    " << relative << '\n';
         }
-        std::cout << "Game resources and system libraries must be placed in this layout separately.\n";
+        std::cout << (package ? "System libraries must be placed in this layout separately.\n" : "Game resources and system libraries must be placed in this layout separately.\n");
         if (args.runPath != "$ORIGIN/libs") std::cout << "Custom library search path (--rpath): " << args.runPath << '\n';
 
         if (args.autorun) return Cli::Autorun(absPath, args.toWindows);

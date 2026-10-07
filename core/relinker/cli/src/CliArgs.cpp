@@ -8,7 +8,7 @@
 namespace Cli {
 
 const char* Usage() {
-    return "Usage: relinker [--help] [--windows | --macos] [--windows-diagnostics] [--windows-gui] [--skip-syscall-check | --trap-sdk-syscall-stubs] [--skip-sce-module | --sce-module-path <path>] [--exclude-sce-module <file>]... [--module-dir <dir>]... [--to-intel] [--to-rosetta] [unused-filter=0|1|2] [--registry] [--rpath <path>] [--lazy-binding] [--autorun] <input.elf> <output.elf>\n"
+    return "Usage: relinker [--help] [--windows | --macos] [--windows-diagnostics] [--windows-gui] [--skip-syscall-check | --trap-sdk-syscall-stubs] [--skip-sce-module | --sce-module-path <path>] [--exclude-sce-module <file>]... [--module-dir <dir>]... [--to-intel] [--to-rosetta] [unused-filter=0|1|2] [--registry] [--rpath <path>] [--oodle <library>] [--lazy-binding] [--autorun] <input.elf|input.pkg> <output.elf>\n"
            "Example: relinker input.elf output.elf";
 }
 
@@ -57,6 +57,10 @@ Args ParseArgs(int argc, char* argv[]) {
             if (i + 1 >= argc)
                 throw std::runtime_error("--rpath requires a value");
             args.runPath = argv[++i];
+        } else if (arg == "--oodle") {
+            if (i + 1 >= argc || std::string(argv[i + 1]).empty())
+                throw std::runtime_error("--oodle requires a library path");
+            args.oodlePath = argv[++i];
         } else if (arg == "--windows") {
             args.toWindows = true;
         } else if (arg == "--macos") {

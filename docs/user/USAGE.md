@@ -37,6 +37,16 @@ Add `--to-intel` for Intel hosts, or `--to-rosetta` for Rosetta; a title that ru
 
 The executable, registry, icon and desktop entry output files must not refer to the input executable or a bundled module being converted, including through a hard link or symbolic link. These collisions fail before any output is written. An existing output file can be replaced if it is separate from those inputs.
 
+### PS5 package input
+
+A plaintext debug package (`\x7FFIH` finalized image whose outer PFS carries the `PPRPLAIN-NOAUTH!` marker) can be passed instead of an ELF. Nothing is extracted: `eboot.bin` and the modules in `sce_module/`, `sce_modules/` and `prx/` are read from the package in memory, fake-signed SELF containers are unwrapped to ELF, and `sce_sys/icon0.png` from the package metadata becomes the Windows icon. Only the output executable, the converted `*.guest.prx` modules and `anyps5-package.ini` are written. The sidecar records the absolute package path, its size and content ID, and the Oodle library path, so the runtime can serve `app0/` from the package.
+
+```sh
+relinker --windows --oodle <path to oo2core library> game.pkg app.exe
+```
+
+Packages store most blocks Kraken-compressed. Decoding them needs a user-supplied Oodle runtime (`oo2core_*.dll` or `liboo2core*.so`) passed with `--oodle`; it is loaded only when a compressed block is read. Encrypted packages, SELF containers with encrypted or compressed segments, NAPS layouts other than native spans, deduplicated blocks and shuffle patterns are rejected with an error.
+
 ## Options
 
 All switches are disabled by default. `unused-filter` defaults to `0`; `--rpath` defaults to `$ORIGIN/libs`.
@@ -62,6 +72,7 @@ All switches are disabled by default. `unused-filter` defaults to `0`; `--rpath`
 | `--skip-syscall-check`        | Deprecated. Disable syscall scanning in the executable and bundled modules.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `--trap-sdk-syscall-stubs`    | Replace the exact ps5-payload-dev generic and numbered syscall wrapper stubs with `UD2`, so unused wrappers do not block relinking. Other syscall instructions still cause an error. If a trapped wrapper runs, it raises an illegal-instruction exception. For debugging only.                                                                                                                                                                    |
 | `--lazy-binding`              | Deprecated. Enable lazy symbol binding instead of eager binding. Incompatible with bundled ELF modules.                                                                                                                                                                                                                                                                                                                                                                     |
+| `--oodle <library>`           | Oodle runtime used to decode Kraken-compressed package blocks. Requires a `.pkg` input; the path is also written to `anyps5-package.ini`.                                                                                                                                                                               |
 
 Specify `unused-filter=0|1|2` without `--`, at most once. Unknown options and extra positional arguments are errors. There is no `--help` flag; invoking `relinker` without arguments prints the usage syntax and exits with an error.
 

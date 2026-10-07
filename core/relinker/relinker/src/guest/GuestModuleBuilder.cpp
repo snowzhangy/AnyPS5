@@ -52,19 +52,21 @@ std::string ModuleStem(std::string name, const bool windows) {
 
 }
 
-std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath, Domain::SysVDynamicSection& dynamic, const bool windows, const bool macos, const bool toIntel, const bool toRosetta, ISyscallScanner& syscallScanner, const bool lazyBinding, const std::string& runPath, const std::set<std::string>& excludedModules, const std::filesystem::path& sceModulePath, const std::vector<std::string>& moduleDirectories) const {
+std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath, Domain::SysVDynamicSection& dynamic, const bool windows, const bool macos, const bool toIntel, const bool toRosetta, ISyscallScanner& syscallScanner, const bool lazyBinding, const std::string& runPath, const std::set<std::string>& excludedModules, const std::filesystem::path& sceModulePath, const std::vector<std::string>& moduleDirectories, std::vector<GuestModuleSource>* packageModules) const {
     const auto root = std::filesystem::absolute(sceModulePath).lexically_normal();
-    if (!std::filesystem::exists(root)) throw Domain::RelinkerException("Guest module parent directory does not exist: " + Io::Utf8Path(root));
-    if (!std::filesystem::is_directory(root)) throw Domain::RelinkerException("Guest module parent path is not a directory: " + Io::Utf8Path(root));
+    const bool fromPackage = packageModules != nullptr;
+    if (fromPackage && !moduleDirectories.empty()) throw Domain::RelinkerException("--module-dir is not supported with a .pkg input");
+    if (!fromPackage && !std::filesystem::exists(root)) throw Domain::RelinkerException("Guest module parent directory does not exist: " + Io::Utf8Path(root));
+    if (!fromPackage && !std::filesystem::is_directory(root)) throw Domain::RelinkerException("Guest module parent path is not a directory: " + Io::Utf8Path(root));
     const auto missingModuleMessage = std::string(GuestModulePattern) + " was not found in: " + Io::Utf8Path(root) + ". Use --skip-sce-module to disable guest module processing.";
     const auto singular = root / "sce_module";
     const auto plural = root / "sce_modules";
     const auto prx = root / "prx";
-    const bool hasSingular = std::filesystem::exists(singular);
-    const bool hasPlural = std::filesystem::exists(plural);
-    const bool hasPrx = std::filesystem::exists(prx);
+    const bool hasSingular = !fromPackage && std::filesystem::exists(singular);
+    const bool hasPlural = !fromPackage && std::filesystem::exists(plural);
+    const bool hasPrx = !fromPackage && std::filesystem::exists(prx);
     if (hasSingular && hasPlural) throw Domain::RelinkerException("Both sce_module and sce_modules exist in the guest module parent directory");
-    if (!hasSingular && !hasPlural && !hasPrx) throw Domain::RelinkerException(missingModuleMessage);
+    if (!fromPackage && !hasSingular && !hasPlural && !hasPrx) throw Domain::RelinkerException(missingModuleMessage);
     std::vector<std::filesystem::path> directories;
     if (hasSingular || hasPlural) directories.push_back(hasSingular ? singular : plural);
     if (hasPrx) directories.push_back(prx);
@@ -81,7 +83,8 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         runtimeDirectories.push_back(directory);
     }
     std::vector<std::filesystem::path> paths;
-    std::set<std::string> unmatchedExclusions = excludedModules;
+    // A package input was scanned and its exclusions matched when it was read.
+    std::set<std::string> unmatchedExclusions = fromPackage ? std::set<std::string>{} : excludedModules;
     const auto isElf = [](const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw Domain::RelinkerException("Cannot read guest candidate: " + Io::Utf8Path(path));
@@ -105,6 +108,7 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
             if (isElf(entry.path())) paths.push_back(entry.path());
         }
     }
+    if (fromPackage) for (const auto& source : *packageModules) paths.push_back(source.Path);
     const auto neededNames = ReadNeededNames(dynamic);
     std::set<std::string> missingNeeded;
     std::map<std::string, std::filesystem::path> neededAliases;
@@ -123,14 +127,18 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
             return name == identity || name == identity + ".prx" || name == identity + ".sprx" || name == identity + ".suprx";
         });
     };
-    for (const auto& path : paths) discovered.emplace(path, GuestImageReader().Read(path, reader.Read(Io::Utf8Path(path)), windows));
+    if (fromPackage) {
+        for (auto& source : *packageModules) discovered.emplace(source.Path, GuestImageReader().Read(source.Path, std::move(source.Bytes), windows));
+    } else {
+        for (const auto& path : paths) discovered.emplace(path, GuestImageReader().Read(path, reader.Read(Io::Utf8Path(path)), windows));
+    }
     if (!unmatchedExclusions.empty()) throw Domain::RelinkerException("Excluded guest module file not found: " + *unmatchedExclusions.begin());
     std::sort(paths.begin(), paths.end());
     paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
     if (paths.empty()) return {};
     if (lazyBinding) throw Domain::RelinkerException("Guest modules require eager binding; --lazy-binding is incompatible");
     std::vector<GuestImage> images;
-    if (std::filesystem::exists(outputPath)) {
+    if (!fromPackage && std::filesystem::exists(outputPath)) {
         for (const auto& path : paths)
             if (std::filesystem::equivalent(path, outputPath))
                 throw Domain::RelinkerException("Executable output would overwrite an input module: " + Io::Utf8Path(outputPath));
@@ -354,7 +362,7 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         const auto destination = outputDirectory / relativeDirectory;
         const auto target = destination / image.OutputName;
         if (target.lexically_normal() == std::filesystem::absolute(outputPath).lexically_normal()) throw Domain::RelinkerException("Guest output collides with the executable output");
-        for (const auto& source : paths) if (std::filesystem::exists(target) && std::filesystem::equivalent(source, target)) throw Domain::RelinkerException("Guest output would overwrite an input module: " + Io::Utf8Path(target));
+        if (!fromPackage) for (const auto& source : paths) if (std::filesystem::exists(target) && std::filesystem::equivalent(source, target)) throw Domain::RelinkerException("Guest output would overwrite an input module: " + Io::Utf8Path(target));
         if (std::filesystem::exists(target) && std::filesystem::equivalent(inputPath, target)) throw Domain::RelinkerException("Guest output would overwrite the input executable");
         Domain::GuestRuntime runtime;
         runtime.UsePlatformTlsResolver = image.UsePlatformTlsResolver;
