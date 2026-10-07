@@ -138,6 +138,16 @@ void RequireHostDirectory(WorkingDirectory& state, const std::filesystem::path& 
 #endif
     throw std::filesystem::filesystem_error("Guest path component is not a directory", host, error);
 }
+std::optional<std::filesystem::path> GuestOf(WorkingDirectory& state, const char* path) {
+    std::string text(path);
+    for (auto& character : text) if (character == '\\') character = '/';
+    std::filesystem::path input(text);
+#ifdef _WIN32
+    if (input.has_root_name()) return std::nullopt;
+#endif
+    const auto current = std::filesystem::path("/") / state.current.lexically_relative(state.root);
+    return (input.is_absolute() ? input : current / input).lexically_normal();
+}
 std::filesystem::path Resolve(WorkingDirectory& state, const char* path) {
     std::string text(path);
     for (auto& character : text) if (character == '\\') character = '/';
@@ -343,6 +353,16 @@ extern "C" std::filesystem::path ResolvePath_nid_no_patch(const char* path) {
     auto& state = Directories();
     std::lock_guard lock(state.mutex);
     return Resolve(state, path);
+}
+
+extern "C" bool GuestPath_nid_no_patch(const char* path, std::string* guest) {
+    if (!path || !guest) { APS5_INVALID_ARG_EX; }
+    auto& state = Directories();
+    std::lock_guard lock(state.mutex);
+    const auto resolved = GuestOf(state, path);
+    if (!resolved) return false;
+    *guest = resolved->generic_string();
+    return true;
 }
 
 extern "C" int SetWorkingDirectory_nid_no_patch(const char* resolved) {

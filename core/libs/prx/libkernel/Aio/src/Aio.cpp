@@ -12,6 +12,7 @@
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libkernel/File/include/File.hpp"
 #include "prx/libkernel/File/include/SharedMemory.hpp"
+#include "prx/libc/include/PackageMount.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 
 #ifndef _WIN32
@@ -62,6 +63,11 @@ std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int
         errno = EFAULT;
         return -1;
     }
+    if (PackageMount::IsDescriptor(fd)) {
+        const auto read = PackagePread_nid_no_patch(fd, buf, nbyte, offset);
+        if (read < 0) errno = static_cast<int>(read & 0xffff);
+        return read < 0 ? -1 : read;
+    }
 #ifdef _WIN32
     if (offset < 0) {
         errno = EINVAL;
@@ -74,6 +80,10 @@ std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int
 }
 
 std::int64_t NativePwrite(std::int32_t fd, const void* buf, std::size_t nbyte, std::int64_t offset) {
+    if (PackageMount::IsDescriptor(fd)) {
+        errno = EBADF;
+        return -1;
+    }
 #ifdef _WIN32
     if (offset < 0) {
         errno = EINVAL;

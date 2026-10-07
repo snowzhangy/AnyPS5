@@ -2,12 +2,14 @@
 #include <cstddef>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/PackageMount.hpp"
 #include <cstring>
 #include <fstream>
 #include <iterator>
 #include <regex>
 #include <set>
 #include <string>
+#include <vector>
 
 // The game is fully installed on the host, so every chunk is local and nothing is pending.
 static constexpr int SCE_PLAYGO_ERROR_BAD_POINTER = static_cast<int>(0x80B2000A);
@@ -25,6 +27,19 @@ static constexpr int SCE_PLAYGO_ERROR_BAD_CHUNK_ID = static_cast<int>(0x80B2000C
 static constexpr int SCE_PLAYGO_ERROR_BAD_SIZE = static_cast<int>(0x80B2000B);
 static constexpr int SCE_PLAYGO_ERROR_BAD_LOCUS = static_cast<int>(0x80B20010);
 
+// Reads an /app0 file from the mounted package first, then from the host app0 directory.
+static bool ReadAppFile(const char* guestPath, std::string& text) {
+    std::vector<std::uint8_t> packaged;
+    if (PackageReadAll_nid_no_patch(guestPath, &packaged)) {
+        text.assign(packaged.begin(), packaged.end());
+        return true;
+    }
+    std::ifstream file(ResolvePath_nid_no_patch(guestPath), std::ios::binary);
+    if (!file) return false;
+    text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    return true;
+}
+
 struct ChunkTable {
     std::set<uint16_t> ids{0};
     bool defined = false;
@@ -32,9 +47,11 @@ struct ChunkTable {
 
 static bool ReadPackageChunks(ChunkTable& table) {
     constexpr std::size_t CountOffset = 0x0A;
-    std::ifstream file(ResolvePath_nid_no_patch("/app0/sce_sys/playgo-chunk.dat"), std::ios::binary);
+    std::string data;
     char header[CountOffset + sizeof(uint16_t)]{};
-    if (!file.read(header, sizeof(header)) || std::memcmp(header, "plgx", 4) != 0) return false;
+    if (!ReadAppFile("/app0/sce_sys/playgo-chunk.dat", data) || data.size() < sizeof(header)) return false;
+    std::memcpy(header, data.data(), sizeof(header));
+    if (std::memcmp(header, "plgx", 4) != 0) return false;
     uint16_t count = 0;
     std::memcpy(&count, header + CountOffset, sizeof(count));
     if (count == 0) return false;
@@ -46,14 +63,13 @@ static bool ReadPackageChunks(ChunkTable& table) {
 static const ChunkTable& Chunks() {
     static const ChunkTable chunks = [] {
         ChunkTable table;
-        std::ifstream file(ResolvePath_nid_no_patch("/app0/playgo-chunkdefs.xml"));
-        if (!file) {
+        std::string text;
+        if (!ReadAppFile("/app0/playgo-chunkdefs.xml", text)) {
             ReadPackageChunks(table);
             return table;
         }
         table.defined = true;
         auto& result = table.ids;
-        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         static const std::regex chunk(R"re(<chunk\s+id="(\d+)")re");
         for (auto it = std::sregex_iterator(text.begin(), text.end(), chunk); it != std::sregex_iterator(); ++it)
             result.insert(static_cast<uint16_t>(std::stoul((*it)[1].str())));

@@ -3,6 +3,7 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/FilesystemError.hpp"
 #include "prx/libc/include/GuestArena.hpp"
+#include "prx/libc/include/PackageMount.hpp"
 #include "prx/libkernel/File/include/File.hpp"
 #include "prx/libkernel/File/include/SharedMemory.hpp"
 #include "prx/libkernel/File/include/DirectoryDescriptor.hpp"
@@ -195,6 +196,7 @@ int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
         const int fd = File::OpenRandomDevice();
         return fd < 0 ? SceErrorFromErrno(errno) : fd;
     }
+    if (int packaged = 0; PackageOpen_nid_no_patch(path, flags, &packaged)) return packaged;
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
 #ifdef _WIN32
@@ -224,6 +226,7 @@ int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
 }
 
 int APS5_VABI sceKernelClose(int d) {
+    if (PackageMount::IsDescriptor(d)) return PackageClose_nid_no_patch(d);
     File::ForgetRandomDevice(d);
 #ifdef _WIN32
     File::ForgetDirectoryDescriptor(d);
@@ -246,6 +249,7 @@ std::int64_t APS5_VABI sceKernelRead(int d, void* buf, std::size_t nbytes) {
     }
     const GuestArena::HostWrite destination(buf, nbytes);
     if (!destination.Open()) errno = EFAULT;
+    else if (PackageMount::IsDescriptor(d)) return PackageRead_nid_no_patch(d, buf, nbytes);
     else if (File::ReadRandomDevice(d, buf, nbytes)) return static_cast<std::int64_t>(nbytes);
     auto n = destination.Open() ? NativeRead(d, buf, nbytes) : -1;
     if (n < 0) return SceIoErrorFromErrno(errno);
@@ -260,6 +264,7 @@ std::int64_t APS5_VABI sceKernelWrite(int d, const void* buf, std::size_t nbytes
     if (buf == nullptr) {
         throw std::invalid_argument(std::string(__func__) + ": buf is null");
     }
+    if (PackageMount::IsDescriptor(d)) return SceErrorFromErrno(EBADF);
     auto n = NativeWrite(d, buf, nbytes);
     if (n < 0) return SceIoErrorFromErrno(errno);
     return static_cast<std::int64_t>(n);
@@ -269,6 +274,7 @@ std::int64_t APS5_VABI sceKernelLseek(int d, std::int64_t offset, int whence) {
     if (whence < 0 || whence > 2) {
         throw std::invalid_argument(std::string(__func__) + ": invalid whence=" + std::to_string(whence));
     }
+    if (PackageMount::IsDescriptor(d)) return PackageSeek_nid_no_patch(d, offset, whence);
 #ifdef _WIN32
     if (const auto directory = File::SeekDirectoryDescriptor(d, offset, whence)) {
         if (*directory < 0) return SceIoErrorFromErrno(errno);
@@ -288,6 +294,7 @@ int APS5_VABI sceKernelStat(const char* path, FileStat* sb) {
         throw std::invalid_argument(std::string(__func__) + ": sb is null");
     }
     if (*path == '\0') return SceErrorFromErrno(2);
+    if (PackageStat_nid_no_patch(path, sb)) return 0;
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     std::error_code error;
@@ -308,6 +315,7 @@ int APS5_VABI sceKernelUnlink(const char* path) {
         throw std::invalid_argument(std::string(__func__) + ": path is null");
     }
     if (*path == '\0') return SceErrorFromErrno(2);
+    if (PackageLookup_nid_no_patch(path, nullptr)) return SceErrorFromErrno(30);
     std::filesystem::path native;
     if (const int error = ResolvePathError_nid_no_patch(path, native)) return SceKernelError(error);
     constexpr int GuestEperm = 1;
