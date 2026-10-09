@@ -305,7 +305,7 @@ public:
                         }
                     }
                 } else {
-                    ULONG_PTR available = capacity - *count;
+                    ULONG_PTR available = watchOutput(cursor, stop, capacity - *count);
                     if (available == 0) return true;
                     DWORD granularity = 0;
                     if (GetWriteWatch(clear ? WRITE_WATCH_FLAG_RESET : 0, reinterpret_cast<void*>(cursor), stop - cursor, pages + *count, &available, &granularity) != 0) fail("collect resident guest writes");
@@ -343,7 +343,7 @@ public:
                 const auto memory = query(cursor);
                 if (memory.State != MEM_COMMIT || memory.Type != MEM_PRIVATE) return false;
                 const auto stop = std::min(end, reinterpret_cast<std::uintptr_t>(memory.BaseAddress) + memory.RegionSize);
-                ULONG_PTR available = capacity - *count;
+                ULONG_PTR available = watchOutput(cursor, stop, capacity - *count);
                 if (available == 0) return true;
                 DWORD granularity = 0;
                 if (GetWriteWatch(clear ? WRITE_WATCH_FLAG_RESET : 0, reinterpret_cast<void*>(cursor), stop - cursor, pages + *count, &available, &granularity) != 0) fail("collect private guest writes");
@@ -356,6 +356,14 @@ public:
     }
 
 private:
+    // The output entries GetWriteWatch gets for [from, to): no more than the 4 KiB pages it spans. The
+    // kernel probes the whole output array on every call, and the caller's array holds 64K entries
+    // (512 KiB), which made each walk of a small range cost more than the walk.
+    static ULONG_PTR watchOutput(std::uintptr_t from, std::uintptr_t to, std::size_t room) {
+        const auto spanned = static_cast<std::size_t>(((to - 1) >> 12) - (from >> 12) + 1);
+        return static_cast<ULONG_PTR>(std::min(room, spanned));
+    }
+
     bool collectable(std::uintptr_t address, std::uintptr_t end) {
         for (auto cursor = address; cursor < end;) {
             const auto base = cursor & ~(pageBytes - 1);
