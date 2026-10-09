@@ -62,9 +62,15 @@ WriteLogLine(stream, "[%s:%d %s] " fmt "\n", _APS5_FILE_, __LINE__, TrimNidPostf
 #define _APS5_LOG_IMPL_NF(stream, fmt) \
 WriteLogLine(stream, "[%s:%d %s] " fmt "\n", _APS5_FILE_, __LINE__, TrimNidPostfix(__func__))
 
+#ifdef APS5_QUIET_LOG
+// Informational output compiles away; the arguments stay type-checked but are never evaluated.
+#define APS5_LOG_OUT(fmt, ...) (false ? (void)std::fprintf(stdout, fmt, __VA_ARGS__) : (void)0)
+#define APS5_LOG_CHARS_OUT(fmt) (false ? (void)std::fputs(fmt, stdout) : (void)0)
+#else
 #define APS5_LOG_OUT(fmt, ...) _APS5_LOG_IMPL(stdout, fmt, __VA_ARGS__)
-#define APS5_LOG_ERR(fmt, ...) _APS5_LOG_IMPL(stderr, fmt, __VA_ARGS__)
 #define APS5_LOG_CHARS_OUT(fmt) _APS5_LOG_IMPL_NF(stdout, fmt)
+#endif
+#define APS5_LOG_ERR(fmt, ...) _APS5_LOG_IMPL(stderr, fmt, __VA_ARGS__)
 #define APS5_LOG_CHARS_ERR(fmt) _APS5_LOG_IMPL_NF(stderr, fmt)
 
 #define APS5_LOG_OUT_IF(enabled, fmt, ...) \

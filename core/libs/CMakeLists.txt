@@ -29,6 +29,11 @@ if(MINGW)
     add_compile_options(-fno-asynchronous-unwind-tables)
 endif()
 
+option(APS5_QUIET_LOG "Compile out informational APS5_LOG_OUT output; errors still print" OFF)
+if(APS5_QUIET_LOG)
+    add_compile_definitions(APS5_QUIET_LOG)
+endif()
+
 function(configure_windows_unwind target)
     if(MINGW)
         if(NOT EXISTS "${CMAKE_OBJCOPY}")
