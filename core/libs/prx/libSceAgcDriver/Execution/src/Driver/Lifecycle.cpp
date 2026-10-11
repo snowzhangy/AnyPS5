@@ -47,6 +47,20 @@ void Driver::stop() {
     StopWorkerSampler();
     CloseRegistrationPreparation();
     std::lock_guard gpuLock(GuestMemory::GpuMutex());
+    std::unordered_map<std::uint64_t, std::shared_ptr<DispatchEntry>> dispatches;
+    std::unordered_map<std::uint64_t, std::shared_ptr<DrawEntry>> draws;
+    {
+        std::lock_guard dispatchLock(dispatchCacheMutex);
+        dispatches.swap(dispatchCache);
+        dispatchOrder.clear();
+    }
+    {
+        std::lock_guard drawLock(drawCacheMutex);
+        draws.swap(drawCache);
+        drawOrder.clear();
+    }
+    dispatches.clear();
+    draws.clear();
     device.Reset();
     replacedDevices.clear();
     Graphics::ShutdownGuestBufferWorkers();
