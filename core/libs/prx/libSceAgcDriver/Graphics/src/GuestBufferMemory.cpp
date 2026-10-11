@@ -488,12 +488,17 @@ ImportWatchRequest importWatchRequest() {
 void decideImportWatch(const Context& context, HostImports& state) {
     if (state.watchDevice == context.device) return;
 #ifdef _WIN32
+    // APS5_WINDOWS_WATCH_IMPORTS=1 keeps direct host imports write-watched, as before 838d02a8. Direct
+    // memory mapped once is private write-watched memory here (WindowsMappings::Map), so comparing its
+    // imports compares whole storage images on every refresh; the cost of watching is that a late
+    // driver write to an imported page reads as a CPU store.
+    static const bool watchImports = std::getenv("APS5_WINDOWS_WATCH_IMPORTS") != nullptr;
     state.watchDevice = context.device;
-    state.unwatchImports = true;
+    state.unwatchImports = !watchImports;
     state.unwatchDmaBufImports = false;
     state.importsStampPages = false;
     state.dmaBufImportsStampPages = false;
-    if (context.hostImportAlignment != 0 && GuestMemory::WriteWatched()) std::fprintf(stderr, "[write-watch] Windows direct host imports use comparisons; separate shared aliases retain guest write tracking\n");
+    if (context.hostImportAlignment != 0 && GuestMemory::WriteWatched()) std::fprintf(stderr, watchImports ? "[write-watch] Windows direct host imports stay watched (APS5_WINDOWS_WATCH_IMPORTS)\n" : "[write-watch] Windows direct host imports use comparisons; separate shared aliases retain guest write tracking\n");
 #else
     const auto request = importWatchRequest();
     state.watchDevice = context.device;
