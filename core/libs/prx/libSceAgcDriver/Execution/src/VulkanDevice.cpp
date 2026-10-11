@@ -1688,6 +1688,17 @@ void VulkanDevice::SubmitRecorded(bool reapFirst) {
     state->recorder->Submit();
 }
 
+bool VulkanDevice::EopSubmitDue() const {
+    static const long maxInFlight = [] {
+        const char* text = std::getenv("APS5_EOP_SUBMIT_MAX_INFLIGHT");
+        return text != nullptr ? std::strtol(text, nullptr, 10) : 1L;
+    }();
+    if (maxInFlight < 0 || !state->recorder) return true;
+    if (maxInFlight == 0) return false;
+    const auto limit = static_cast<std::size_t>(maxInFlight);
+    return state->recorder->NewestUnsignaled(limit) < limit;
+}
+
 bool VulkanDevice::CanWaitUnlocked() const {
     return state->recorder && state->recorder->HasTimeline();
 }

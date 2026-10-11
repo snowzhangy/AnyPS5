@@ -61,6 +61,12 @@ public:
     // mutex through the flush hook, so a thread submitting on another queue's behalf (a WAIT_REG_MEM
     // poller, a compute worker's between-packet flush) passes false: it must only submit, never wait.
     void SubmitRecorded(bool reapFirst = true);
+    // Whether an end-of-pipe interrupt's batch should be submitted at once: only while the GPU has
+    // caught up (no recorded batch still running), else the batch goes out with the next submit
+    // (label flush deadline, a wait, a flip, the end of the submission) and the interrupt arrives
+    // after the work queued ahead of it anyway. APS5_EOP_SUBMIT_MAX_INFLIGHT=N allows N running
+    // batches (-1: always submit, as upstream; 0: never at once). Under the mutex.
+    bool EopSubmitDue() const;
     void StoreIdleResults(bool reapFirst = true);
     // Unlocked drain: SubmitAndEpoch (under the mutex) returns the serial covering every recorded
     // batch (0: nothing in flight); WaitRecorded(serial) waits for it WITHOUT the mutex (the caller

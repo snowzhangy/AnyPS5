@@ -29,7 +29,11 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
         const auto label = Pm4::DecodeLabelWrite(packet);
         const bool storesNothing = (packet[2] >> 29u) == 0 || (packet[3] | (static_cast<std::uint64_t>(packet[4]) << 32u)) == 0;
         if (label.has_value() || storesNothing) {
-            bumpEpoch(&EpochBumps::drains);
+            // The worker does not wait for the GPU here (the interrupt is a completion action), so
+            // nothing orders a CPU write before the packets that follow: the collect epoch lasts.
+            // APS5_EOP_EPOCH=1 bumps it as when this packet drained the device.
+            static const bool eopEpoch = std::getenv("APS5_EOP_EPOCH") != nullptr;
+            if (eopEpoch) bumpEpoch(&EpochBumps::drains);
             GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Label);
             std::lock_guard gpuLock(GuestMemory::GpuMutex());
             const auto localDevice = device.Load();
@@ -53,7 +57,7 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
             if (reason == 0 || reason == 5) {
                 const auto queueId = submission.queue;
                 interruptDeferred = localDevice->AfterRecordedWork([queueId] { AgcDriverDeliverEopInterrupt(queueId); }, submission.queue == 0);
-                if (interruptDeferred && workOpen) localDevice->SubmitRecorded(submission.queue == 0);
+                if (interruptDeferred && workOpen && localDevice->EopSubmitDue()) localDevice->SubmitRecorded(submission.queue == 0);
                 wroteOnGpu = true;
             } else if (reason == 1) {
                 wroteOnGpu = true;

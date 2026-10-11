@@ -2446,6 +2446,15 @@ std::size_t Recorder::UnsignaledBatches() const {
     return static_cast<std::size_t>(std::count_if(inFlight.begin(), inFlight.end(), [&](const auto& batch) { return !signaled(*batch); }));
 }
 
+std::size_t Recorder::NewestUnsignaled(std::size_t limit) const {
+    std::size_t count = 0;
+    for (auto it = inFlight.rbegin(); it != inFlight.rend() && count < limit; ++it) {
+        if (signaled(**it)) break;
+        ++count;
+    }
+    return count;
+}
+
 void Recorder::Keep(std::shared_ptr<void> object, std::size_t bytes) {
     ensureOpen();
     open->kept.push_back(std::move(object));

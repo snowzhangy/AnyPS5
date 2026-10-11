@@ -755,6 +755,8 @@ struct WriteTracker {
         std::uintptr_t end = 0;
         std::uint64_t epoch = 0;
         std::uint64_t unwatched = 0;
+        // ForgetSerial when the walk began: pages unmapped or re-registered since then were not walked.
+        std::uint64_t forget = 0;
     };
     std::array<Memo, 256> memo{};
     std::size_t nextMemo = 0;
@@ -976,6 +978,25 @@ struct ThreadCollectMemo {
 };
 thread_local ThreadCollectMemo threadCollectMemo;
 
+// Behind the ring, a table indexed by the walk's first page: an epoch lasts a whole submission (dozens
+// of draws, each collecting a dozen or more ranges: targets, CMASK and DCC keys, textures, buffers), so
+// the ring has long dropped a target's walk when the next draw collects it again. Only a thread that
+// bumps its epoch (a queue worker) gets one; elsewhere no entry could ever match.
+// APS5_NO_COLLECT_MEMO_TABLE=1 leaves the ring alone.
+struct ThreadCollectTable {
+    static constexpr std::size_t Bits = 12;
+    std::array<WriteTracker::Memo, std::size_t{1} << Bits> entries{};
+    static std::size_t slot(std::uintptr_t first) {
+        return static_cast<std::size_t>(((first >> 12) * 0x9E3779B97F4A7C15ull) >> (64 - Bits));
+    }
+};
+thread_local std::unique_ptr<ThreadCollectTable> threadCollectTable;
+
+bool collectMemoTable() {
+    static const bool enabled = std::getenv("APS5_NO_COLLECT_MEMO_TABLE") == nullptr;
+    return enabled;
+}
+
 bool sharedCollectMemo() {
     static const bool shared = std::getenv("APS5_SHARED_COLLECT_MEMO") != nullptr;
     return shared;
@@ -1071,15 +1092,23 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
     // must not differ between them.
     const auto epoch = currentCollectEpoch();
     const auto unwatched = unwatchSerial.load(std::memory_order_acquire);
+    const auto forget = forgetSerial.load(std::memory_order_acquire);
     const bool useMemo = memoized && collectMemoEnabled() && bytes != 0;
     if (useMemo && !sharedCollectMemo()) {
         // An entry exists only for a completed walk of an in-arena range, so the tracker is
         // initialized and watched; nothing below the lock needs asking.
         for (const auto& entry : threadCollectMemo.entries) {
-            if (entry.epoch == epoch && entry.unwatched == unwatched && entry.begin <= first && stop <= entry.end) {
+            if (entry.epoch == epoch && entry.unwatched == unwatched && entry.forget == forget && entry.begin <= first && stop <= entry.end) {
                 // The current generation, not the memoized one: blocks stamped since (MarkWritten, an
                 // overlapping collect) were written before this caller reads, and an older value would
                 // make every later UnchangedSince fail until the epoch ends.
+                collectMemoHits.fetch_add(1, std::memory_order_relaxed);
+                return tracker.generation.load(std::memory_order_relaxed);
+            }
+        }
+        if (threadCollectTable != nullptr) {
+            const auto& entry = threadCollectTable->entries[ThreadCollectTable::slot(first)];
+            if (entry.epoch == epoch && entry.unwatched == unwatched && entry.forget == forget && entry.begin <= first && stop <= entry.end) {
                 collectMemoHits.fetch_add(1, std::memory_order_relaxed);
                 return tracker.generation.load(std::memory_order_relaxed);
             }
@@ -1091,7 +1120,7 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
     auto cursor = first;
     if (useMemo && sharedCollectMemo()) {
         for (const auto& entry : tracker.memo) {
-            if (entry.epoch == epoch && entry.unwatched == unwatchSerial.load(std::memory_order_relaxed) && entry.begin <= cursor && stop <= entry.end) {
+            if (entry.epoch == epoch && entry.unwatched == unwatchSerial.load(std::memory_order_relaxed) && entry.forget == forget && entry.begin <= cursor && stop <= entry.end) {
                 collectMemoHits.fetch_add(1, std::memory_order_relaxed);
                 return tracker.generation;
             }
@@ -1112,8 +1141,14 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
     // Only a completed walk is remembered; a failed one (uncommitted pages) returned 0 above.
     if (collectMemoEnabled()) {
         const auto serial = unwatchSerial.load(std::memory_order_relaxed);
-        if (sharedCollectMemo()) tracker.memo[tracker.nextMemo++ % tracker.memo.size()] = {first, stop, epoch, serial};
-        else threadCollectMemo.entries[threadCollectMemo.next++ % threadCollectMemo.entries.size()] = {first, stop, epoch, serial};
+        if (sharedCollectMemo()) tracker.memo[tracker.nextMemo++ % tracker.memo.size()] = {first, stop, epoch, serial, forget};
+        else {
+            threadCollectMemo.entries[threadCollectMemo.next++ % threadCollectMemo.entries.size()] = {first, stop, epoch, serial, forget};
+            if (threadCollectEpoch != 0 && collectMemoTable()) {
+                if (threadCollectTable == nullptr) threadCollectTable = std::make_unique<ThreadCollectTable>();
+                threadCollectTable->entries[ThreadCollectTable::slot(first)] = {first, stop, epoch, serial, forget};
+            }
+        }
     }
     return tracker.generation;
 }

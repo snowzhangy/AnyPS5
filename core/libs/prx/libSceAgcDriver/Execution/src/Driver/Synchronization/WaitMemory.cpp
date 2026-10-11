@@ -137,8 +137,12 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         return;
     }
     if (heldAtSubmit) return;
+    // A label this queue's own packets stored orders no CPU write: the collect epoch lasts.
+    // APS5_SAME_QUEUE_STORE_EPOCH=1 bumps it as for any other satisfied wait.
+    static const bool sameQueueEpoch = std::getenv("APS5_SAME_QUEUE_STORE_EPOCH") != nullptr;
     if (std::uint32_t writer = queue; !requireMemory && storedSince(packet, awaited, awaitedBytes, received, &writer)) {
         if (writer != queue) notePendingWait(packet, queue, received);
+        else if (!sameQueueEpoch) epochPoint.bump = false;
         return;
     }
 
@@ -331,6 +335,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
     while (!Pm4::WaitSatisfiedUnchecked(packet)) {
         if (std::uint32_t writer = queue; !requireMemory && storedSince(packet, awaited, awaitedBytes, received, &writer)) {
             if (writer != queue) notePendingWait(packet, queue, received);
+            else if (!sameQueueEpoch) epochPoint.bump = false;
             return;
         }
         ++polls;

@@ -508,6 +508,10 @@ public:
     std::uint64_t NewestSubmitted(std::chrono::steady_clock::time_point* submittedAt = nullptr) const;
     // In-flight batches whose fence has not signaled (one status query each); under the mutex.
     std::size_t UnsignaledBatches() const;
+    // The unsignaled batches at the newest end of the in-flight list, counted up to `limit`: the
+    // queue completes in order, so the walk stops at the first signaled batch (one fence query when
+    // the GPU has caught up).
+    std::size_t NewestUnsignaled(std::size_t limit) const;
     static bool FlipReadCheck();
 
 private:
