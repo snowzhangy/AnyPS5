@@ -347,22 +347,6 @@ static int PosixFailure(int error) {
     return -1;
 }
 
-static std::int64_t PackageVectorRead(int d, const KernelIovec* iov, int iovcnt, std::int64_t offset) {
-    if (iovcnt < 0 || iovcnt > KERNEL_IOV_MAX) return SceErrorFromErrno(GUEST_EINVAL);
-    if (iov == nullptr && iovcnt != 0) return SceErrorFromErrno(GUEST_EFAULT);
-    std::int64_t total = 0;
-    for (int i = 0; i < iovcnt; ++i) {
-        const GuestArena::HostWrite destination(iov[i].base, iov[i].length);
-        if (!destination.Open()) return SceErrorFromErrno(GUEST_EFAULT);
-        const auto read = offset < 0 ? PackageRead_nid_no_patch(d, iov[i].base, iov[i].length)
-                                     : PackagePread_nid_no_patch(d, iov[i].base, iov[i].length, offset + total);
-        if (read < 0) return read;
-        total += read;
-        if (static_cast<std::size_t>(read) < iov[i].length) break;
-    }
-    return total;
-}
-
 static int PosixResult(int result) {
     return result < 0 ? PosixFailure(result & 0xffff) : result;
 }

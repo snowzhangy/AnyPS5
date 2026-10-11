@@ -82,6 +82,13 @@ int HostPoll(KernelSocketPoll::Entry* descriptors, std::size_t count, int timeou
     return result;
 }
 
+#else
+
+// select never collects host descriptors on Windows, so the host poll paths are unreachable there.
+int HostPoll(KernelSocketPoll::Entry*, std::size_t, int) {
+    throw std::runtime_error("select: polling host descriptors is not implemented on Windows");
+}
+
 #endif
 
 }
